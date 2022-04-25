@@ -107,16 +107,10 @@ func mapTask(mapf func(string, string) []KeyValue, response ApplyResponse) {
 
 // 把buffer对应的内容写入tempfile
 func writeToFile(mapNum int, reduceNum int, buffer *[]KeyValue) {
-	// dir, _ := os.Getwd()
-	// file, err := ioutil.TempFile(dir, "mr-tmp-*")
-	//if err != nil {
-	//	log.Fatalf("worker cannot create temp file")
-	//}
-
-	oname := fmt.Sprintf("mr-tmp-%v-%v", mapNum, reduceNum)
-	file, err := os.Create(oname)
+	dir, _ := os.Getwd()
+	file, err := ioutil.TempFile(dir, "mr-tmp-*")
 	if err != nil {
-		log.Fatalf("worker cannot create file %v", oname)
+		log.Fatalf("worker cannot create temp file")
 	}
 
 	enc := json.NewEncoder(file)
@@ -128,25 +122,19 @@ func writeToFile(mapNum int, reduceNum int, buffer *[]KeyValue) {
 	}
 	file.Close()
 
-	// oname := fmt.Sprintf("mr-tmp-%v-%v", mapNum, reduceNum)
-	//err = os.Rename(file.Name(), oname)
-	//if err != nil {
-	//	log.Fatalf("err when renameing file: %v", err)
-	//}
+	oname := fmt.Sprintf("mr-tmp-%v-%v", mapNum, reduceNum)
+	err = os.Rename(file.Name(), oname)
+	if err != nil {
+		log.Fatalf("err when renameing file: %v", err)
+	}
 }
 
 // reduce过程
 func reduceTask(reducef func(string, []string) string, response ApplyResponse) {
-	//dir, _ := os.Getwd()
-	//file, err := ioutil.TempFile(dir, "mr-out-*")
-	//if err != nil {
-	//	log.Printf("work with reduce task %v cannot create tempfile", response.Id)
-	//}
-
-	oname := fmt.Sprintf("mr-out-%v", response.Id)
-	file, err := os.Create(oname)
+	dir, _ := os.Getwd()
+	file, err := ioutil.TempFile(dir, "mr-out-*")
 	if err != nil {
-		log.Fatalf("reduce worker cannot create file %v", oname)
+		log.Printf("work with reduce task %v cannot create tempfile", response.Id)
 	}
 
 	intermediate := readFromLocalFile(response.NMap, response.Id)
@@ -169,8 +157,8 @@ func reduceTask(reducef func(string, []string) string, response ApplyResponse) {
 	}
 
 	file.Close()
-	//oname := fmt.Sprintf("mr-out-%v", response.Id)
-	//os.Rename(tempFile.Name(), oname)
+	oname := fmt.Sprintf("mr-out-%v", response.Id)
+	os.Rename(file.Name(), oname)
 
 	log.Printf("reduce worker %v start to commit to coordinator")
 	CallCommit(CommitRequest{

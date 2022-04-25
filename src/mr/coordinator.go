@@ -66,7 +66,7 @@ func (c *Coordinator) Apply(request *ApplyRequest, response *ApplyResponse) erro
 				c.mapTasks[i].taskStatus = taskWorking
 				isBlocked = false
 				// 后台协程监视worker是否超时
-				// go c.monitorForTimeOut(&c.mapTasks[i])
+				go c.monitorForTimeOut(&c.mapTasks[i])
 				break
 			}
 		}
@@ -87,6 +87,7 @@ func (c *Coordinator) Apply(request *ApplyRequest, response *ApplyResponse) erro
 				c.reduceTasks[i].taskStatus = taskWorking
 
 				isBlocked = false;
+				go c.monitorForTimeOut(&c.reduceTasks[i])
 				break
 			}
 		}
@@ -209,7 +210,7 @@ func (c *Coordinator) createWork() {
 	}
 }
 
-// 监控worker是否超时
+// meige监控worker是否超时
 func (c * Coordinator) monitorForTimeOut(task *Task) {
 	ctx, _ := context.WithTimeout(context.Background(), time.Second * 20) // 不需要cancel函数
 	select {
