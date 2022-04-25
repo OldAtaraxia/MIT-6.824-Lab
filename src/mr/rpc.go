@@ -22,18 +22,29 @@ type ExampleReply struct {
 	Y int
 }
 
-type applyRequest struct {
+type ApplyRequest struct {
 	// worker请求coordinator分配task
 	// ...感觉也不需要什么参数
 }
 
-type applyResponse struct {
+type ApplyResponse struct {
 	// coordinator应答worker分配task的请求
-	id int
-	file string
-	jobStatus JobStatus
-	nReduce int
-	nMap int
+	Id        int
+	File      string
+	Jobstatus JobStatus
+	NReduce   int
+	NMap      int
+	IsBlocked bool // 告诉worker是否需要阻塞
+}
+
+type CommitRequest struct {
+	// worker告知coordinator任务已经完成
+	Id        int
+	Jobstatus JobStatus
+}
+
+type CommitResponse struct {
+	// ...感觉也不需要什么参数
 }
 
 // Add your RPC definitions here.

@@ -51,13 +51,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	// CallExample()
 	for {
 		response := CallApply()
-		switch response.jobStatus{
+		if response.IsBlocked {
+			time.Sleep(time.Second)
+			continue
+		}
+		switch response.Jobstatus {
 		case mapStatus:
+			log.Printf("worker receive map task %v", response.Id)
 			mapTask(mapf, response)
 		case reduceStatus:
+			log.Printf("worker receive reduce task %v", response.Id)
 			reduceTask(reducef, response)
-		case WaitingStatus:
-			time.Sleep(time.Second * 5)
 		case ExitStatus:
 			os.Exit(0)
 		}
@@ -66,9 +70,9 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 // 执行map过程
-func mapTask(mapf func(string, string) []KeyValue, response applyResponse) {
+func mapTask(mapf func(string, string) []KeyValue, response ApplyResponse) {
 	// 得到文件内容
-	filename := response.file
+	filename := response.File
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("map worker cannot open file %v", filename)
@@ -77,59 +81,80 @@ func mapTask(mapf func(string, string) []KeyValue, response applyResponse) {
 	if err != nil {
 		log.Fatalf("map worker cannot read file %v", filename)
 	}
-
 	file.Close()
 
 	// 执行map函数
 	kva := mapf(filename, string(content))
 
+
 	// 写入临时文件
-	buffer := make([][]KeyValue, response.nReduce)
+	buffer := make([][]KeyValue, response.NReduce)
 	for i := 0; i < len(kva); i++  {
-		hash := ihash(kva[i].Key)
+		hash := ihash(kva[i].Key) % response.NReduce
 		buffer[hash] = append(buffer[hash], kva[i])
 	}
 
-	for i := 0; i < response.nReduce; i++ {
-		writeToTempFile(response.id, i, &buffer[i])
+	for i := 0; i < response.NReduce; i++ {
+		writeToFile(response.Id, i, &buffer[i])
 	}
+
+	log.Printf("map worker %v start to commit to coordinator", response.Id)
+	CallCommit(CommitRequest{
+		Id:        response.Id,
+		Jobstatus: response.Jobstatus,
+	})
 }
 
 // 把buffer对应的内容写入tempfile
-func writeToTempFile(mapNum int, reduceNum int, buffer *[]KeyValue) {
-	dir, _ := os.Getwd()
+func writeToFile(mapNum int, reduceNum int, buffer *[]KeyValue) {
+	// dir, _ := os.Getwd()
+	// file, err := ioutil.TempFile(dir, "mr-tmp-*")
+	//if err != nil {
+	//	log.Fatalf("worker cannot create temp file")
+	//}
 
-	file, err := ioutil.TempFile(dir, "mr-tmp-*")
+	oname := fmt.Sprintf("mr-tmp-%v-%v", mapNum, reduceNum)
+	file, err := os.Create(oname)
 	if err != nil {
-		log.Fatalf("worker cannot create temp file")
+		log.Fatalf("worker cannot create file %v", oname)
 	}
 
 	enc := json.NewEncoder(file)
 	for _, kv := range *buffer {
 		err := enc.Encode(&kv)
 		if err != nil {
-			log.Fatalf("worker cannot write to tempfile")
+			log.Fatalf("worker cannot write to file")
 		}
 	}
 	file.Close()
 
-	oname := ""
-	fmt.Sprintf(oname, "mr-tmp-%v-%v", mapNum, reduceNum)
-	os.Rename(file.Name(), oname)
+	// oname := fmt.Sprintf("mr-tmp-%v-%v", mapNum, reduceNum)
+	//err = os.Rename(file.Name(), oname)
+	//if err != nil {
+	//	log.Fatalf("err when renameing file: %v", err)
+	//}
 }
 
 // reduce过程
-func reduceTask(reducef func(string, []string) string, response applyResponse) {
-	oname := ""
-	fmt.Sprintf(oname, "mr-out-%v", response.id)
-	ofile, _ := os.Create(oname) // 结果字符串
+func reduceTask(reducef func(string, []string) string, response ApplyResponse) {
+	//dir, _ := os.Getwd()
+	//file, err := ioutil.TempFile(dir, "mr-out-*")
+	//if err != nil {
+	//	log.Printf("work with reduce task %v cannot create tempfile", response.Id)
+	//}
 
-	intermediate := readFromLocalFile(response.nMap, response.id)
+	oname := fmt.Sprintf("mr-out-%v", response.Id)
+	file, err := os.Create(oname)
+	if err != nil {
+		log.Fatalf("reduce worker cannot create file %v", oname)
+	}
+
+	intermediate := readFromLocalFile(response.NMap, response.Id)
 	sort.Sort(ByKey(intermediate))
 	// 在每个不同的key上进行reduce操作
 	i := 0
 	for i < len(intermediate) {
-		j := i + 1
+		j := i + 1 // 第一个与i的key不相等的位置
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
@@ -138,20 +163,29 @@ func reduceTask(reducef func(string, []string) string, response applyResponse) {
 			values = append(values, intermediate[k].Value)
 		}
 		output := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(file, "%v %v\n", intermediate[i].Key, output)
 
-		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		i = j
 	}
 
+	file.Close()
+	//oname := fmt.Sprintf("mr-out-%v", response.Id)
+	//os.Rename(tempFile.Name(), oname)
+
+	log.Printf("reduce worker %v start to commit to coordinator")
+	CallCommit(CommitRequest{
+		Id:        response.Id,
+		Jobstatus: response.Jobstatus,
+	})
 }
 
 func readFromLocalFile(nMap int, reduceNum int) []KeyValue {
 	var kva []KeyValue
 	for i := 0; i < nMap; i++ {
-		oname := ""
-		fmt.Sprintf(oname, "mr-tmp-%v-%v", i, reduceNum)
+		oname := fmt.Sprintf("mr-tmp-%v-%v", i, reduceNum)
 		file, err := os.Open(oname)
 		if err != nil {
-			log.Fatalf("reduce worker cannot open file %v", oname)
+			log.Printf("reduce worker cannot open file %v", oname)
 		}
 		// read from json file
 		dec := json.NewDecoder(file)
@@ -162,6 +196,7 @@ func readFromLocalFile(nMap int, reduceNum int) []KeyValue {
 			}
 			kva = append(kva, kv)
 		}
+		file.Close()
 	}
 	return kva
 }
@@ -191,11 +226,17 @@ func CallExample() {
 	fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
-func CallApply() applyResponse{
-	args := applyRequest{}
-	response := applyResponse{}
-	call("Coordinator.apply", &args, &response)
+func CallApply() ApplyResponse {
+	args := ApplyRequest{}
+	response := ApplyResponse{}
+	call("Coordinator.Apply", &args, &response)
 	return response
+}
+
+func CallCommit(request CommitRequest) {
+	response := CommitResponse{}
+	log.Printf(" commit request %v", request)
+	call("Coordinator.Commit", &request, &response)
 }
 
 //
